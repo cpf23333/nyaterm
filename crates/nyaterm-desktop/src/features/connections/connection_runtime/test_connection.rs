@@ -1,4 +1,3 @@
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,7 +27,6 @@ use super::helpers::{build_saved_connection_from_editor, validate_editor_account
 /// One connection test is capped so a black-holed host cannot keep the editor
 /// busy forever. The worker observes cancellation through `ConnectionAttempt`.
 const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(15);
-const CONNECTION_TEST_TCP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ConnectionTestSuccess {
@@ -333,13 +331,6 @@ fn run_connection_test(
         } => {
             let backend = nyaterm_remote_desktop::parse_rdp_backend(backend)
                 .map_err(|error| error.to_string())?;
-            if backend == nyaterm_remote_desktop::RdpBackend::Windows {
-                // The Windows Native backend is hosted by the ActiveX component
-                // rather than the isolated IronRDP helper, so keep the
-                // reachability check for it.
-                probe_network(connection, host, *port, &context, &attempt)?;
-                return Ok(ConnectionTestSuccess::TcpReachable);
-            }
             let (username, password) =
                 connection_credentials_from_draft(connection, username, &context)?;
             let route = start_test_route(connection, host, *port, &context)?;
@@ -368,6 +359,21 @@ fn run_connection_test(
                     max_attempts: 0,
                 },
             };
+            if backend == nyaterm_remote_desktop::RdpBackend::Windows {
+                // The system ActiveX control is thread-affine, so the probe owns
+                // a short-lived STA thread with a hidden parent window instead of
+                // running on this worker thread. It also declines any system
+                // dialog, so an unattended test can never block on one.
+                let cancel = attempt.clone();
+                let result = nyaterm_windows_rdp::probe_native_rdp(
+                    &config,
+                    CONNECTION_TEST_TIMEOUT,
+                    move || cancel.is_cancelled(),
+                );
+                drop(route);
+                result.map_err(|error| error.message().to_string())?;
+                return Ok(ConnectionTestSuccess::RdpAuthenticated);
+            }
             let result = nyaterm_remote_desktop::probe_rdp_connection_with_launch(
                 config,
                 native_launch,
@@ -824,25 +830,12 @@ fn has_network_route(connection: &SavedConnection) -> bool {
     })
 }
 
-fn probe_network(
-    connection: &SavedConnection,
-    host: &str,
-    port: u16,
-    context: &SshSessionConfigBuildContext,
-    attempt: &ConnectionAttempt,
-) -> Result<(), String> {
-    if has_network_route(connection) {
-        let mut config = context.network_route_config(connection, host.to_string(), port)?;
-        if let Some(jump) = config.jump.as_mut() {
-            use_test_only_host_keys(jump, context);
-        }
-        NetworkRoute::probe(config, attempt.clone()).map_err(|error| error.to_string())
-    } else {
-        probe_tcp_direct(host, port, attempt)
-    }
-}
-
+/// Test-only reachability probe for the local TCP tests below.
+#[cfg(test)]
 fn probe_tcp_direct(host: &str, port: u16, attempt: &ConnectionAttempt) -> Result<(), String> {
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    const TCP_TIMEOUT: Duration = Duration::from_secs(10);
     attempt.check()?;
     let addresses = (host, port)
         .to_socket_addrs()
@@ -854,7 +847,7 @@ fn probe_tcp_direct(host: &str, port: u16, attempt: &ConnectionAttempt) -> Resul
     let mut last_error = None;
     for address in addresses {
         attempt.check()?;
-        match TcpStream::connect_timeout(&address, CONNECTION_TEST_TCP_TIMEOUT) {
+        match TcpStream::connect_timeout(&address, TCP_TIMEOUT) {
             Ok(stream) => {
                 drop(stream);
                 return Ok(());

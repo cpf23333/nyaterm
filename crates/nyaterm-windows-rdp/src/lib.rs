@@ -8,12 +8,16 @@ pub mod lifecycle;
 #[cfg(windows)]
 mod native;
 #[cfg(windows)]
+mod probe;
+#[cfg(windows)]
 pub use controller::{NativeRdpCompleted, NativeRdpControl, NativeRdpOperation};
 #[cfg(windows)]
 pub use native::{
     HostCreateError, HostStatus, NativeRdpCapabilities, NativeRdpHost, Viewport, maintain_retired,
     retired_count,
 };
+#[cfg(windows)]
+pub use probe::{NativeRdpProbeError, probe_native_rdp};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeRdpError {

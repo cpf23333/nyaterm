@@ -15,6 +15,10 @@ struct NyaRdpConfig {
     uint32_t redirect_smartcards, redirect_microphone, redirect_webauthn;
     uint32_t audio_mode;
     uint32_t admin, reconnect, max_attempts, performance;
+    /// 0 = prompt for an untrusted server certificate, 1 = require a trusted
+    /// certificate, 2 = accept without validating. A test connection narrows its
+    /// policy to 2 so it can never block on a system dialog.
+    uint32_t certificate_policy;
 };
 struct NyaRdpEvent { uint64_t generation; uint32_t kind; int32_t code; uint32_t extended; };
 struct NyaRdpRect { int32_t x, y, width, height; uint32_t scale; };

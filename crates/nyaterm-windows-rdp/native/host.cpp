@@ -11,7 +11,7 @@
 #include "mstscax.tlh"
 
 namespace {
-constexpr uint32_t kAbiVersion = 2;
+constexpr uint32_t kAbiVersion = 3;
 constexpr size_t kEventLimit = 256;
 constexpr HRESULT kBusy = HRESULT_FROM_WIN32(ERROR_BUSY);
 class RdpModule : public CAtlModuleT<RdpModule> {};
@@ -40,6 +40,7 @@ struct NyaRdpHost {
     // what was actually applied to the COM control.
     uint32_t redirect_clipboard = 1;
     uint32_t audio_mode = 2;
+    uint32_t certificate_policy = 0;
     DWORD cookie = 0;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
@@ -195,9 +196,11 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     *stage = 108; // EnableCredSspSupport
     if (FAILED(hr = host.advanced->put_EnableCredSspSupport(config.nla ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
     *stage = 109; // AuthenticationLevel
-    // Let the system control ask the user before continuing with an untrusted
-    // server certificate, as mstsc does. Never silently skip server validation.
-    if (FAILED(hr = host.advanced->put_AuthenticationLevel(2))) return hr;
+    // 0 connects without validating, 1 fails on an untrusted certificate and 2
+    // asks the user. Prompt and trust-on-first-use stay interactive; the
+    // insecure policy and the test probe never open a system dialog.
+    if (FAILED(hr = host.advanced->put_AuthenticationLevel(
+            config.certificate_policy == 2 ? 0 : (config.certificate_policy == 1 ? 1 : 2)))) return hr;
     *stage = 110; // ConnectToAdministerServer
     if (FAILED(hr = host.advanced->put_ConnectToAdministerServer(config.admin ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
     const auto flag = [](uint32_t value) { return value ? VARIANT_TRUE : VARIANT_FALSE; };
@@ -260,6 +263,14 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
         *stage = 134;
         hr = secret->put_ClearTextPassword(password);
         if (password.m_str) SecureZeroMemory(password.m_str, SysStringByteLen(password));
+        // A supplied password must not be replaced by an interactive logon
+        // prompt: an unattended connection test has no user to answer it.
+        if (FAILED(hr)) return hr;
+        CComQIPtr<IMsRdpClientNonScriptable3> credentials(host.control);
+        if (credentials) {
+            *stage = 136;
+            if (FAILED(hr = credentials->put_PromptForCredentials(VARIANT_FALSE))) return hr;
+        }
     }
     return hr;
 }
@@ -298,7 +309,7 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
         config->clipboard > 1 || config->audio_mode > 2 ||
         config->redirect_drives > 1 || config->redirect_printers > 1 || config->redirect_ports > 1 ||
         config->redirect_smartcards > 1 || config->redirect_microphone > 1 ||
-        config->redirect_webauthn > 1) return E_INVALIDARG;
+        config->redirect_webauthn > 1 || config->certificate_policy > 2) return E_INVALIDARG;
     const HWND parent = reinterpret_cast<HWND>(config->parent);
     if (!IsWindow(parent) || GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return RPC_E_WRONG_THREAD;
     NyaRdpHost* host = new (std::nothrow) NyaRdpHost();
@@ -308,6 +319,7 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
         host->parent = parent; host->generation = config->generation;
         host->redirect_clipboard = config->clipboard;
         host->audio_mode = config->audio_mode;
+        host->certificate_policy = config->certificate_policy;
         auto create = [&]() -> HRESULT {
             // DirectComposition applies the parent's child-clipping rules.
             // Keep this window-lifetime style once native children are hosted:
@@ -530,7 +542,9 @@ extern "C" int32_t nya_rdp_verify_connection_policy(NyaRdpHost* host) noexcept t
     VARIANT_BOOL enabled = VARIANT_TRUE;
     unsigned int authentication = 0;
     if (FAILED(hr = host->advanced->get_AuthenticationLevel(&authentication))) return hr;
-    if (authentication != 2) return E_FAIL;
+    const unsigned int expected_authentication =
+        host->certificate_policy == 2 ? 0 : (host->certificate_policy == 1 ? 1 : 2);
+    if (authentication != expected_authentication) return E_FAIL;
     if (FAILED(hr = host->advanced->get_RedirectClipboard(&enabled))) return hr;
     if (enabled != (host->redirect_clipboard ? VARIANT_TRUE : VARIANT_FALSE)) return E_FAIL;
     CComQIPtr<IMsRdpClientNonScriptable3> resources(host->control);

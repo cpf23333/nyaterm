@@ -5,7 +5,9 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::Instant;
 
-use nyaterm_remote_desktop::{RdpAudioMode, RdpDisplayConfig, RdpSessionConfig};
+use nyaterm_remote_desktop::{
+    RdpAudioMode, RdpCertificatePolicy, RdpDisplayConfig, RdpSessionConfig,
+};
 use zeroize::Zeroizing;
 
 use crate::cleanup::{Cleanup, CleanupAction};
@@ -57,6 +59,22 @@ struct Config {
     reconnect: u32,
     max_attempts: u32,
     performance: u32,
+    /// `AuthenticationLevel`: 0 skips validation, 1 requires a trusted
+    /// certificate, 2 prompts. See the mapping below.
+    certificate_policy: u32,
+}
+
+/// Map the editor's certificate policy to Agent's `AuthenticationLevel`.
+///
+/// The Windows control has no trust-on-first-use state of its own, so prompt and
+/// trust-on-first-use both stay interactive. `Insecure` accepts without a
+/// dialog, which is also what the connection test narrows every policy to.
+fn mstsc_authentication_level(policy: RdpCertificatePolicy) -> u32 {
+    match policy {
+        RdpCertificatePolicy::Strict | RdpCertificatePolicy::RejectChanged => 1,
+        RdpCertificatePolicy::Insecure => 0,
+        RdpCertificatePolicy::Prompt | RdpCertificatePolicy::TrustOnFirstUse => 2,
+    }
 }
 
 /// Map the editor's audio choice to the documented `AudioRedirectionMode`
@@ -229,7 +247,7 @@ impl NativeRdpHost {
         let audio_mode = mstsc_audio_mode(redirection.audio);
         let ffi = Config {
             size: size_of::<Config>() as u32,
-            version: 2,
+            version: 3,
             parent,
             generation,
             server: Text::new(&server),
@@ -254,6 +272,7 @@ impl NativeRdpHost {
             reconnect: config.reconnect.enabled.into(),
             max_attempts: config.reconnect.max_attempts,
             performance: performance_flags(&config.display),
+            certificate_policy: mstsc_authentication_level(config.certificate_policy),
         };
         let mut owner = std::ptr::null_mut();
         let mut stage = 0;

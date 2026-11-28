@@ -62,6 +62,8 @@ struct Config {
     /// `AuthenticationLevel`: 0 skips validation, 1 requires a trusted
     /// certificate, 2 prompts. See the mapping below.
     certificate_policy: u32,
+    /// Non-zero suppresses every optional system dialog.
+    unattended: u32,
 }
 
 /// Map the editor's certificate policy to Agent's `AuthenticationLevel`.
@@ -221,6 +223,29 @@ impl NativeRdpHost {
         generation: u64,
         config: &RdpSessionConfig,
     ) -> Result<Self, HostCreateError> {
+        unsafe { Self::create_with_dialogs(parent, generation, config, false) }
+    }
+
+    /// Like [`Self::create`], but suppresses every optional system dialog. Only
+    /// an unattended connection test uses this.
+    ///
+    /// # Safety
+    ///
+    /// Same requirements as [`Self::create`].
+    pub unsafe fn create_unattended(
+        parent: usize,
+        generation: u64,
+        config: &RdpSessionConfig,
+    ) -> Result<Self, HostCreateError> {
+        unsafe { Self::create_with_dialogs(parent, generation, config, true) }
+    }
+
+    unsafe fn create_with_dialogs(
+        parent: usize,
+        generation: u64,
+        config: &RdpSessionConfig,
+        unattended: bool,
+    ) -> Result<Self, HostCreateError> {
         config
             .backend
             .validate_config(config)
@@ -247,7 +272,7 @@ impl NativeRdpHost {
         let audio_mode = mstsc_audio_mode(redirection.audio);
         let ffi = Config {
             size: size_of::<Config>() as u32,
-            version: 3,
+            version: 4,
             parent,
             generation,
             server: Text::new(&server),
@@ -273,6 +298,7 @@ impl NativeRdpHost {
             max_attempts: config.reconnect.max_attempts,
             performance: performance_flags(&config.display),
             certificate_policy: mstsc_authentication_level(config.certificate_policy),
+            unattended: unattended.into(),
         };
         let mut owner = std::ptr::null_mut();
         let mut stage = 0;

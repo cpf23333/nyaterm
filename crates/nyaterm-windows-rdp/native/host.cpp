@@ -11,7 +11,7 @@
 #include "mstscax.tlh"
 
 namespace {
-constexpr uint32_t kAbiVersion = 3;
+constexpr uint32_t kAbiVersion = 4;
 constexpr size_t kEventLimit = 256;
 constexpr HRESULT kBusy = HRESULT_FROM_WIN32(ERROR_BUSY);
 class RdpModule : public CAtlModuleT<RdpModule> {};
@@ -220,6 +220,18 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     if (FAILED(hr = host.advanced->put_RedirectPOSDevices(VARIANT_FALSE))) return hr;
     *stage = 118; // IMsRdpClientNonScriptable3
     if (FAILED(hr = host.control->QueryInterface(__uuidof(IMsRdpClientNonScriptable3), reinterpret_cast<void**>(&resources)))) return hr;
+    // An unattended probe owns no user: suppress every optional prompt so a
+    // synchronous COM call can never wait on a dialog.
+    if (config.unattended) {
+        *stage = 137; // ShowRedirectionWarningDialog
+        if (FAILED(hr = resources->put_ShowRedirectionWarningDialog(VARIANT_FALSE))) return hr;
+        *stage = 138; // WarnAboutClipboardRedirection
+        if (FAILED(hr = resources->put_WarnAboutClipboardRedirection(VARIANT_FALSE))) return hr;
+        *stage = 139; // WarnAboutSendingCredentials
+        if (FAILED(hr = resources->put_WarnAboutSendingCredentials(VARIANT_FALSE))) return hr;
+        *stage = 140; // PromptForCredentials
+        if (FAILED(hr = resources->put_PromptForCredentials(VARIANT_FALSE))) return hr;
+    }
     // Authentication dialogs must be modal to the visible application window,
     // not the initially hidden ActiveX child. The typelib uses pointer-sized wireHWND.
     *stage = 135; // UIParentWindowHandle
@@ -309,7 +321,7 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
         config->clipboard > 1 || config->audio_mode > 2 ||
         config->redirect_drives > 1 || config->redirect_printers > 1 || config->redirect_ports > 1 ||
         config->redirect_smartcards > 1 || config->redirect_microphone > 1 ||
-        config->redirect_webauthn > 1 || config->certificate_policy > 2) return E_INVALIDARG;
+        config->redirect_webauthn > 1 || config->certificate_policy > 2 || config->unattended > 1) return E_INVALIDARG;
     const HWND parent = reinterpret_cast<HWND>(config->parent);
     if (!IsWindow(parent) || GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return RPC_E_WRONG_THREAD;
     NyaRdpHost* host = new (std::nothrow) NyaRdpHost();

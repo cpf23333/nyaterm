@@ -112,7 +112,7 @@ fn drive_probe(
     timeout: Duration,
     is_cancelled: &(impl Fn() -> bool + Send),
 ) -> Result<(), NativeRdpProbeError> {
-    let mut control = NativeRdpControl::create(parent.handle(), rect, config)
+    let mut control = NativeRdpControl::create_unattended(parent.handle(), rect, config)
         .map_err(NativeRdpProbeError::new)?;
     // A system dialog owns a modal loop inside a synchronous COM call, so the
     // deadline below can never fire while one is open. The guard declines those
@@ -449,7 +449,9 @@ mod tests {
         live.host = host;
         live.username = user;
         live.password = Some(password.into());
-        live.use_nla = true;
+        live.use_nla = std::env::var("NYATERM_RDP_PROBE_NLA")
+            .map(|value| value != "0")
+            .unwrap_or(true);
         live.certificate_policy = RdpCertificatePolicy::Insecure;
         let result = probe_native_rdp(&live, Duration::from_secs(45), || false);
         println!("live probe: {result:?}");

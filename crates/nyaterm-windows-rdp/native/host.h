@@ -19,6 +19,8 @@ struct NyaRdpConfig {
     /// certificate, 2 = accept without validating. A test connection narrows its
     /// policy to 2 so it can never block on a system dialog.
     uint32_t certificate_policy;
+    /// 1 = never show a system dialog (connection tests own no user).
+    uint32_t unattended;
 };
 struct NyaRdpEvent { uint64_t generation; uint32_t kind; int32_t code; uint32_t extended; };
 struct NyaRdpRect { int32_t x, y, width, height; uint32_t scale; };

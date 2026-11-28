@@ -52,6 +52,7 @@ struct Runtime {
     fit: bool,
     dynamic_unsupported: bool,
     local_input: bool,
+    unattended: bool,
     events: VecDeque<NativeRdpConnectionEvent>,
     details: NativeRdpSessionDetails,
     last_native_status: Option<(HostStatus, NativeRdpPhase, bool, bool)>,
@@ -78,6 +79,25 @@ impl NativeRdpControl {
         rect: NativeRdpRect,
         config: &RdpSessionConfig,
     ) -> Result<Self, String> {
+        Self::create_with_dialogs(parent, rect, config, false)
+    }
+
+    /// Like [`Self::create`], but suppresses every optional system dialog. Only
+    /// an unattended connection test uses this.
+    pub fn create_unattended(
+        parent: isize,
+        rect: NativeRdpRect,
+        config: &RdpSessionConfig,
+    ) -> Result<Self, String> {
+        Self::create_with_dialogs(parent, rect, config, true)
+    }
+
+    fn create_with_dialogs(
+        parent: isize,
+        rect: NativeRdpRect,
+        config: &RdpSessionConfig,
+        unattended: bool,
+    ) -> Result<Self, String> {
         let mut config = config.clone();
         config.normalize_backend_settings();
         nyaterm_remote_desktop::activex::validate_start(&config, rect)
@@ -101,6 +121,7 @@ impl NativeRdpControl {
                 fit,
                 dynamic_unsupported: false,
                 local_input: false,
+                unattended,
                 events: VecDeque::new(),
                 details: NativeRdpSessionDetails::default(),
                 last_native_status: None,
@@ -248,7 +269,12 @@ impl Runtime {
             self.config = None;
         }
         if let Some(config) = self.config.take() {
-            match unsafe { NativeRdpHost::create(self.parent, self.generation, &config) } {
+            let created = if self.unattended {
+                unsafe { NativeRdpHost::create_unattended(self.parent, self.generation, &config) }
+            } else {
+                unsafe { NativeRdpHost::create(self.parent, self.generation, &config) }
+            };
+            match created {
                 Ok(host) => self.host = Some(host),
                 Err(error) => {
                     self.events
